@@ -25,12 +25,22 @@ func handlerAddFeed(s *state, cmd command) error {
 		UpdatedAt: time.Now(),
 		Name:      name,
 		Url:       url,
-		UserID:    uuid.NullUUID{UUID: user.ID, Valid: true},
+		UserID:    user.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add feed: %w", err)
 	}
-	fmt.Printf("Feed added:\n ID: %v\n Name: %s\n URL: %s\n UserID: %v\n CreatedAt: %s\n UpdatedAt: %s\n", rssFeed.ID, rssFeed.Name, rssFeed.Url, rssFeed.UserID.UUID, rssFeed.CreatedAt, rssFeed.UpdatedAt)
+	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		FeedID:    rssFeed.ID,
+		UserID:    user.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to follow feed: %w", err)
+	}
+	fmt.Printf("Feed added:\n ID: %v\n Name: %s\n URL: %s\n UserID: %v\n CreatedAt: %s\n UpdatedAt: %s\n", rssFeed.ID, rssFeed.Name, rssFeed.Url, rssFeed.UserID, rssFeed.CreatedAt, rssFeed.UpdatedAt)
 	return nil
 }
 
@@ -41,7 +51,7 @@ func handlerListFeeds(s *state, _ command) error {
 	}
 	for _, rssFeed := range rssFeeds {
 
-		user, err := s.db.GetUserByID(context.Background(), rssFeed.UserID.UUID)
+		user, err := s.db.GetUserByID(context.Background(), rssFeed.UserID)
 		if err != nil {
 			return fmt.Errorf("couldn't get user: %w", err)
 		}
