@@ -2,8 +2,16 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"gator/internal/database"
+	"log"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func handlerAgg(s *state, cmd command) error {
@@ -20,9 +28,49 @@ func handlerAgg(s *state, cmd command) error {
 	for ; ; <-ticker.C {
 		err := scrapeFeeds(s)
 		if err != nil {
-			return fmt.Errorf("failed to scrape feeds: %w", err)
+			log.Printf("failed to scrape feeds: %v", err)
 		}
 	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	var limit int
+	var err error
+	if len(cmd.args) == 1 {
+		limit, err = strconv.Atoi(cmd.args[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse limit: %w", err)
+		}
+		if limit < 1 {
+			return fmt.Errorf("limit must be greater than 0")
+		}
+	}
+	if len(cmd.args) > 1 {
+		return fmt.Errorf("browse requires at most one argument")
+	}
+	if len(cmd.args) == 0 {
+		limit = 2
+	}
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get posts: %w", err)
+	}
+	if len(posts) == 0 {
+		fmt.Println("No posts found!")
+		return nil
+	}
+	for _, post := range posts {
+		fmt.Printf("%s\n%s\n\n", post.Title, post.Url)
+		fmt.Printf("Published at: %v\n", post.PublishedAt)
+		if post.Description.Valid {
+			fmt.Printf("%s\n", post.Description.String)
+		}
+		fmt.Println("==============================")
+	}
+	return nil
 }
 
 func scrapeFeeds(s *state) error {
@@ -39,7 +87,42 @@ func scrapeFeeds(s *state) error {
 		return fmt.Errorf("failed to fetch feed: %w", err)
 	}
 	for _, item := range rssFeed.Channel.Item {
-		fmt.Printf("Title: %s\n", item.Title)
+		publishedAt := sql.NullTime{}
+		if t, err := time.Parse(time.RFC1123Z, item.PubDate); err == nil {
+			publishedAt = sql.NullTime{
+				Time:  t,
+				Valid: true,
+			}
+		}
+		parsedLink := parseURL(feed.Url, item.Link)
+		_, err = s.db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			FeedID:      feed.ID,
+			Title:       item.Title,
+			Url:         parsedLink,
+			Description: sql.NullString{String: item.Description, Valid: item.Description != ""},
+			PublishedAt: publishedAt,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				continue
+			}
+			log.Printf("failed to create post: %v", err)
+		}
 	}
 	return nil
+}
+
+func parseURL(baseURL, linkURL string) string {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return linkURL
+	}
+	rel, err := url.Parse(linkURL)
+	if err != nil {
+		return linkURL
+	}
+	return base.ResolveReference(rel).String()
 }
